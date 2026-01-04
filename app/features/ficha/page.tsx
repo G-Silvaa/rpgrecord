@@ -4,7 +4,7 @@ import type React from "react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { AttributeBlock, RpgFichaPayload, createRpgFicha } from "./api";
+import { AttributeBlock, RpgFichaPayload, createRpgFicha, updateRpgFicha } from "./api";
 
 type AbilityKey = keyof AttributeBlock;
 type TabKey = "actions" | "spells" | "equipment" | "features";
@@ -45,6 +45,11 @@ type EquipmentForm = {
   equipped: boolean;
   notes: string;
 };
+
+type ModalState =
+  | { type: "attack"; index: number | null; data: AttackForm }
+  | { type: "spell"; index: number | null; data: SpellForm }
+  | { type: "equipment"; index: number | null; data: EquipmentForm };
 
 type FichaForm = {
   characterName: string;
@@ -92,8 +97,8 @@ const mapPayloadToForm = (data: RpgFichaResponse | null): FichaForm => {
     },
     inspirationPoints: data.inspirationPoints?.toString() ?? "",
     proficiencyBonus: data.proficiencyBonus?.toString() ?? "",
-    skillProficiencies: data.skillProficiencies ?? [],
-    saveProficiencies: data.saveProficiencies ?? [],
+    skillProficiencies: uniqueArray(data.skillProficiencies ?? []),
+    saveProficiencies: uniqueArray(data.saveProficiencies ?? []),
     notes: data.notes ?? "",
     maxHp: data.maxHp?.toString() ?? "",
     currentHp: data.currentHp?.toString() ?? "",
@@ -133,6 +138,63 @@ const mapPayloadToForm = (data: RpgFichaResponse | null): FichaForm => {
     })),
   };
 };
+
+const toPayloadFromResponse = (data: RpgFichaResponse): RpgFichaPayload => ({
+  characterName: data.characterName ?? "",
+  race: data.race ?? "",
+  subRace: data.subRace ?? "",
+  ancestry: data.ancestry ?? "",
+  alignment: data.alignment ?? "",
+  attributes: {
+    strength: data.attributes?.strength ?? 0,
+    dexterity: data.attributes?.dexterity ?? 0,
+    constitution: data.attributes?.constitution ?? 0,
+    intelligence: data.attributes?.intelligence ?? 0,
+    wisdom: data.attributes?.wisdom ?? 0,
+    charisma: data.attributes?.charisma ?? 0,
+  },
+  inspirationPoints: data.inspirationPoints ?? 0,
+  proficiencyBonus: data.proficiencyBonus ?? 0,
+  skillProficiencies: data.skillProficiencies ?? [],
+  saveProficiencies: data.saveProficiencies ?? [],
+  notes: data.notes ?? "",
+  maxHp: data.maxHp ?? 0,
+  currentHp: data.currentHp ?? 0,
+  tempHp: data.tempHp ?? 0,
+  hpDice: data.hpDice ?? "",
+  attacks: (data.attacks ?? []).map((attack) => ({
+    name: attack.name ?? "",
+    melee: Boolean(attack.melee),
+    rangeNormal: attack.rangeNormal ?? 0,
+    rangeLong: attack.rangeLong ?? 0,
+    attackBonus: attack.attackBonus ?? 0,
+    damageDice: attack.damageDice ?? "",
+    damageBonus: attack.damageBonus ?? 0,
+    damageType: attack.damageType ?? "",
+  })),
+  spells: (data.spells ?? []).map((spell) => ({
+    name: spell.name ?? "",
+    level: spell.level ?? 0,
+    school: spell.school ?? "",
+    damageDice: spell.damageDice ?? "",
+    damageBonus: spell.damageBonus ?? 0,
+    damageType: spell.damageType ?? "",
+    prepared: Boolean(spell.prepared),
+    castingTime: spell.castingTime ?? "",
+    rangeText: spell.rangeText ?? "",
+    components: spell.components ?? "",
+    duration: spell.duration ?? "",
+    description: spell.description ?? "",
+  })),
+  equipment: (data.equipment ?? []).map((item) => ({
+    name: item.name ?? "",
+    quantity: item.quantity ?? 0,
+    weight: item.weight ?? 0,
+    valueGold: item.valueGold ?? 0,
+    equipped: Boolean(item.equipped),
+    notes: item.notes ?? "",
+  })),
+});
 
 const abilityMeta: { key: AbilityKey; short: string; label: string }[] = [
   { key: "strength", short: "FOR", label: "Força" },
@@ -297,6 +359,52 @@ const createEmptyForm = (): FichaForm => ({
   equipment: [],
 });
 
+const createEmptyAttack = (): AttackForm => ({
+  name: "",
+  melee: true,
+  rangeNormal: "",
+  rangeLong: "",
+  attackBonus: "",
+  damageDice: "",
+  damageBonus: "",
+  damageType: "",
+});
+
+const createEmptySpell = (): SpellForm => ({
+  name: "",
+  level: "",
+  school: "",
+  damageDice: "",
+  damageBonus: "",
+  damageType: "",
+  prepared: false,
+  castingTime: "",
+  rangeText: "",
+  components: "",
+  duration: "",
+  description: "",
+});
+
+const createEmptyEquipment = (): EquipmentForm => ({
+  name: "",
+  quantity: "",
+  weight: "",
+  valueGold: "",
+  equipped: false,
+  notes: "",
+});
+
+const formatEnumLabel = (value: string) =>
+  value
+    ? value
+        .toLowerCase()
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")
+    : "";
+
+const uniqueArray = (items: string[]) => Array.from(new Set(items));
+
 const formatSigned = (value: number) => (value >= 0 ? `+${value}` : `${value}`);
 
 const formatModifier = (score: number) => {
@@ -308,6 +416,18 @@ const toNumber = (value: string) => {
   if (value.trim() === "") return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const toNumeric = (value: string | number | null | undefined) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") return toNumber(value);
+  return 0;
+};
+
+const getAppliedProficiency = (value: string | number | null | undefined) => {
+  const num = toNumeric(value);
+  if (num <= 0) return 2;
+  return Math.min(num, 2);
 };
 
 const buildActionDesc = (attack: AttackForm) => {
@@ -335,16 +455,10 @@ export default function FichaPage({
   const [mode, setMode] = useState<"edit" | "view">(initialMode);
   const [savedFicha, setSavedFicha] = useState<RpgFichaResponse | null>(initialData ?? null);
   const [activeTab, setActiveTab] = useState<TabKey>("actions");
-  const [lastSavedSection, setLastSavedSection] = useState<TabKey | null>(null);
-  const [actionsCollapsed, setActionsCollapsed] = useState(false);
-  const [editingAttackIndex, setEditingAttackIndex] = useState<number | null>(null);
-  const [pendingAttack, setPendingAttack] = useState<AttackForm | null>(null);
-  const [spellsCollapsed, setSpellsCollapsed] = useState(false);
-  const [editingSpellIndex, setEditingSpellIndex] = useState<number | null>(null);
-  const [pendingSpell, setPendingSpell] = useState<SpellForm | null>(null);
-  const [equipmentCollapsed, setEquipmentCollapsed] = useState(false);
-  const [editingEquipmentIndex, setEditingEquipmentIndex] = useState<number | null>(null);
-  const [pendingEquipment, setPendingEquipment] = useState<EquipmentForm | null>(null);
+  const [editModal, setEditModal] = useState<ModalState | null>(null);
+  const [isHpSyncing, setIsHpSyncing] = useState(false);
+  const [isModalSaving, setIsModalSaving] = useState(false);
+  const hpSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const attributes = abilityMeta.map((ability) => {
     const score = toNumber(form.attributes[ability.key]);
@@ -356,10 +470,12 @@ export default function FichaPage({
     };
   });
 
+  const proficiencyValue = getAppliedProficiency(form.proficiencyBonus);
+
   const savingThrows = abilityMeta.map((ability) => {
     const mod = Math.floor((toNumber(form.attributes[ability.key]) - 10) / 2);
     const proficient = form.saveProficiencies.includes(abilityCodes[ability.key]);
-    const total = mod + (proficient ? toNumber(form.proficiencyBonus) : 0);
+    const total = mod + (proficient ? proficiencyValue : 0);
     return { label: ability.label, code: abilityCodes[ability.key], value: formatSigned(total) };
   });
 
@@ -367,22 +483,8 @@ export default function FichaPage({
     const abilityScore = toNumber(form.attributes[skill.ability]);
     const mod = Math.floor((abilityScore - 10) / 2);
     const proficient = form.skillProficiencies.includes(skill.key);
-    const total = mod + (proficient ? toNumber(form.proficiencyBonus) : 0);
+    const total = mod + (proficient ? proficiencyValue : 0);
     return { label: skill.label, key: skill.key, value: formatSigned(total) };
-  });
-
-  const actions = form.attacks.map((attack) => {
-    const bonus = formatSigned(toNumber(attack.attackBonus));
-    const damageBonusValue = toNumber(attack.damageBonus);
-    const damageBonus = damageBonusValue ? ` ${formatSigned(damageBonusValue)}` : "";
-    const damage = `${attack.damageDice}${damageBonus}`.trim();
-    return {
-      name: attack.name || "Sem nome",
-      desc: buildActionDesc(attack),
-      bonus,
-      damage: damage || "—",
-      type: attack.damageType || "—",
-    };
   });
 
   const handleDiceRoll = () => {
@@ -391,53 +493,19 @@ export default function FichaPage({
   };
 
   useEffect(() => {
+    return () => {
+      if (hpSyncTimer.current) {
+        clearTimeout(hpSyncTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (initialData) {
       setForm(mapPayloadToForm(initialData));
       setSavedFicha(initialData);
     }
   }, [initialData]);
-
-  useEffect(() => {
-    if (form.attacks.length === 0) {
-      setEditingAttackIndex(null);
-      return;
-    }
-    if (editingAttackIndex === null && !pendingAttack) {
-      setEditingAttackIndex(0);
-      return;
-    }
-    if (editingAttackIndex !== null && editingAttackIndex >= form.attacks.length) {
-      setEditingAttackIndex(form.attacks.length - 1);
-    }
-  }, [editingAttackIndex, form.attacks.length, pendingAttack]);
-
-  useEffect(() => {
-    if (form.spells.length === 0) {
-      setEditingSpellIndex(null);
-      return;
-    }
-    if (editingSpellIndex === null && !pendingSpell) {
-      setEditingSpellIndex(0);
-      return;
-    }
-    if (editingSpellIndex !== null && editingSpellIndex >= form.spells.length) {
-      setEditingSpellIndex(form.spells.length - 1);
-    }
-  }, [editingSpellIndex, form.spells.length, pendingSpell]);
-
-  useEffect(() => {
-    if (form.equipment.length === 0) {
-      setEditingEquipmentIndex(null);
-      return;
-    }
-    if (editingEquipmentIndex === null && !pendingEquipment) {
-      setEditingEquipmentIndex(0);
-      return;
-    }
-    if (editingEquipmentIndex !== null && editingEquipmentIndex >= form.equipment.length) {
-      setEditingEquipmentIndex(form.equipment.length - 1);
-    }
-  }, [editingEquipmentIndex, form.equipment.length, pendingEquipment]);
 
   const adjustHp = (delta: number) => {
     setForm((current) => {
@@ -448,26 +516,126 @@ export default function FichaPage({
     });
   };
 
-  const mapFormToPayload = (): RpgFichaPayload => ({
-    characterName: form.characterName,
-    race: form.race,
-    subRace: form.subRace,
-    ancestry: form.ancestry,
-    alignment: form.alignment,
+  const openAttackModal = (index?: number) => {
+    const hasIndex = typeof index === "number";
+    const data = hasIndex ? form.attacks[index!] : createEmptyAttack();
+    setEditModal({ type: "attack", index: hasIndex ? index! : null, data });
+  };
+
+  const openSpellModal = (index?: number) => {
+    const hasIndex = typeof index === "number";
+    const data = hasIndex ? form.spells[index!] : createEmptySpell();
+    setEditModal({ type: "spell", index: hasIndex ? index! : null, data });
+  };
+
+  const openEquipmentModal = (index?: number) => {
+    const hasIndex = typeof index === "number";
+    const data = hasIndex ? form.equipment[index!] : createEmptyEquipment();
+    setEditModal({ type: "equipment", index: hasIndex ? index! : null, data });
+  };
+
+  const saveModal = async () => {
+    if (!editModal) return;
+    setIsModalSaving(true);
+    try {
+      let nextForm = form;
+      if (editModal.type === "attack") {
+        const next = [...form.attacks];
+        if (editModal.index === null) {
+          next.push(editModal.data);
+        } else {
+          next[editModal.index] = editModal.data;
+        }
+        nextForm = { ...form, attacks: next };
+      }
+      if (editModal.type === "spell") {
+        const next = [...form.spells];
+        if (editModal.index === null) {
+          next.push(editModal.data);
+        } else {
+          next[editModal.index] = editModal.data;
+        }
+        nextForm = { ...form, spells: next };
+      }
+      if (editModal.type === "equipment") {
+        const next = [...form.equipment];
+        if (editModal.index === null) {
+          next.push(editModal.data);
+        } else {
+          next[editModal.index] = editModal.data;
+        }
+        nextForm = { ...form, equipment: next };
+      }
+
+      setForm(nextForm);
+
+      if (savedFicha?.id) {
+        const payload = mapFormToPayload(nextForm);
+        const result = await updateRpgFicha(savedFicha.id, payload);
+        const updated = { ...(result ?? payload), id: savedFicha.id } as RpgFichaResponse;
+        setSavedFicha(updated);
+      }
+      setEditModal(null);
+    } catch (error) {
+      console.error("Falha ao salvar via modal:", error);
+      setSaveError(error instanceof Error ? error.message : "Erro ao salvar mudanças.");
+    } finally {
+      setIsModalSaving(false);
+    }
+  };
+
+  const removeAttack = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      attacks: current.attacks.filter((_, i) => i !== index),
+    }));
+  };
+
+  const removeSpell = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      spells: current.spells.filter((_, i) => i !== index),
+    }));
+  };
+
+  const removeEquipment = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      equipment: current.equipment.filter((_, i) => i !== index),
+    }));
+  };
+
+  const updateModalData = (field: string, value: string | boolean) => {
+    setEditModal((current) =>
+      current
+        ? ({
+            ...current,
+            data: { ...(current as ModalState).data, [field]: value },
+          } as ModalState)
+        : current
+    );
+  };
+
+  const mapFormToPayload = (data: FichaForm = form): RpgFichaPayload => ({
+    characterName: data.characterName,
+    race: data.race,
+    subRace: data.subRace,
+    ancestry: data.ancestry,
+    alignment: data.alignment,
     attributes: abilityMeta.reduce(
-      (acc, ability) => ({ ...acc, [ability.key]: toNumber(form.attributes[ability.key]) }),
+      (acc, ability) => ({ ...acc, [ability.key]: toNumber(data.attributes[ability.key]) }),
       {} as AttributeBlock
     ),
-    inspirationPoints: toNumber(form.inspirationPoints),
-    proficiencyBonus: toNumber(form.proficiencyBonus),
-    skillProficiencies: form.skillProficiencies,
-    saveProficiencies: form.saveProficiencies,
-    notes: form.notes,
-    maxHp: toNumber(form.maxHp),
-    currentHp: toNumber(form.currentHp),
-    tempHp: toNumber(form.tempHp),
-    hpDice: form.hpDice,
-    attacks: form.attacks.map((attack) => ({
+    inspirationPoints: toNumber(data.inspirationPoints),
+    proficiencyBonus: toNumber(data.proficiencyBonus),
+    skillProficiencies: data.skillProficiencies,
+    saveProficiencies: data.saveProficiencies,
+    notes: data.notes,
+    maxHp: toNumber(data.maxHp),
+    currentHp: toNumber(data.currentHp),
+    tempHp: toNumber(data.tempHp),
+    hpDice: data.hpDice,
+    attacks: data.attacks.map((attack) => ({
       name: attack.name,
       melee: attack.melee,
       rangeNormal: toNumber(attack.rangeNormal),
@@ -477,7 +645,7 @@ export default function FichaPage({
       damageBonus: toNumber(attack.damageBonus),
       damageType: attack.damageType,
     })),
-    spells: form.spells.map((spell) => ({
+    spells: data.spells.map((spell) => ({
       name: spell.name,
       level: toNumber(spell.level),
       school: spell.school,
@@ -491,7 +659,7 @@ export default function FichaPage({
       duration: spell.duration,
       description: spell.description,
     })),
-    equipment: form.equipment.map((item) => ({
+    equipment: data.equipment.map((item) => ({
       name: item.name,
       quantity: toNumber(item.quantity),
       weight: toNumber(item.weight),
@@ -501,21 +669,22 @@ export default function FichaPage({
     })),
   });
 
-  const handleSave = async (section?: TabKey) => {
+  const handleSave = async () => {
     setIsSaving(true);
     setSaveError(null);
     setSaveMessage(null);
-    setLastSavedSection(null);
     try {
       const payload = mapFormToPayload();
-      const result = await createRpgFicha(payload);
-      const savedData = (result ?? payload) as RpgFichaResponse;
+      const result = savedFicha?.id
+        ? await updateRpgFicha(savedFicha.id, payload)
+        : await createRpgFicha(payload);
+      const savedData = {
+        ...(result ?? payload),
+        id: savedFicha?.id ?? (result as RpgFichaResponse | null)?.id,
+      } as RpgFichaResponse;
       setSavedFicha(savedData);
       setMode("view");
       setSaveMessage("Ficha salva com sucesso!");
-      if (section) {
-        setLastSavedSection(section);
-      }
     } catch (error) {
       setSaveError(
         error instanceof Error ? error.message : "Não foi possível salvar a ficha."
@@ -525,12 +694,38 @@ export default function FichaPage({
     }
   };
 
+  const queueHpSync = (nextData: RpgFichaResponse) => {
+    if (!nextData.id) return;
+    if (hpSyncTimer.current) {
+      clearTimeout(hpSyncTimer.current);
+    }
+    hpSyncTimer.current = setTimeout(async () => {
+      setIsHpSyncing(true);
+      try {
+        await updateRpgFicha(nextData.id as string, toPayloadFromResponse(nextData));
+      } catch (error) {
+        console.error("Falha ao sincronizar HP:", error);
+      } finally {
+        setIsHpSyncing(false);
+      }
+    }, 250);
+  };
+
+  const handlePreviewHpChange = (value: number) => {
+    setSavedFicha((current) => {
+      if (!current) return current;
+      const next = { ...current, currentHp: value };
+      queueHpSync(next);
+      return next;
+    });
+  };
+
   const toggleSaveProficiency = (code: string) => {
     setForm((current) => {
       const exists = current.saveProficiencies.includes(code);
       const next = exists
         ? current.saveProficiencies.filter((c) => c !== code)
-        : [...current.saveProficiencies, code];
+        : uniqueArray([...current.saveProficiencies, code]);
       return { ...current, saveProficiencies: next };
     });
   };
@@ -540,7 +735,7 @@ export default function FichaPage({
       const exists = current.skillProficiencies.includes(key);
       const next = exists
         ? current.skillProficiencies.filter((c) => c !== key)
-        : [...current.skillProficiencies, key];
+        : uniqueArray([...current.skillProficiencies, key]);
       return { ...current, skillProficiencies: next };
     });
   };
@@ -551,1029 +746,127 @@ export default function FichaPage({
       attributes: { ...current.attributes, [key]: rawValue },
     }));
   };
-
-  const addAttack = () => {
-    setActionsCollapsed(false);
-    setPendingAttack({
-      name: "",
-      melee: true,
-      rangeNormal: "",
-      rangeLong: "",
-      attackBonus: "",
-      damageDice: "",
-      damageBonus: "",
-      damageType: "",
-    });
-    setEditingAttackIndex(null);
-  };
-
-  const updateAttack = (
-    index: number,
-    field: keyof AttackForm,
-    value: string | boolean
-  ) => {
-    setForm((current) => {
-      const next = current.attacks.map((attack, i) =>
-        i === index ? { ...attack, [field]: value } : attack
-      );
-      return { ...current, attacks: next };
-    });
-  };
-
-  const removeAttack = (index: number) => {
-    setForm((current) => ({
-      ...current,
-      attacks: current.attacks.filter((_, i) => i !== index),
-    }));
-  };
-
-  const saveActionsLocally = () => {
-    setForm((current) => {
-      const nextAttacks = pendingAttack
-        ? [...current.attacks, pendingAttack]
-        : current.attacks;
-      return { ...current, attacks: nextAttacks };
-    });
-    setPendingAttack(null);
-    setLastSavedSection("actions");
-    setActionsCollapsed(true);
-    setEditingAttackIndex(null);
-  };
-
-  const saveSpellsLocally = () => {
-    setForm((current) => {
-      const nextSpells = pendingSpell ? [...current.spells, pendingSpell] : current.spells;
-      return { ...current, spells: nextSpells };
-    });
-    setPendingSpell(null);
-    setLastSavedSection("spells");
-    setSpellsCollapsed(true);
-    setEditingSpellIndex(null);
-  };
-
-  const saveEquipmentLocally = () => {
-    setForm((current) => {
-      const nextEquipment = pendingEquipment
-        ? [...current.equipment, pendingEquipment]
-        : current.equipment;
-      return { ...current, equipment: nextEquipment };
-    });
-    setPendingEquipment(null);
-    setLastSavedSection("equipment");
-    setEquipmentCollapsed(true);
-    setEditingEquipmentIndex(null);
-  };
-
-  const addSpell = () => {
-    setSpellsCollapsed(false);
-    setPendingSpell({
-      name: "",
-      level: "",
-      school: "",
-      damageDice: "",
-      damageBonus: "",
-      damageType: "",
-      prepared: false,
-      castingTime: "",
-      rangeText: "",
-      components: "",
-      duration: "",
-      description: "",
-    });
-    setEditingSpellIndex(null);
-  };
-
-  const updateSpell = (
-    index: number,
-    field: keyof SpellForm,
-    value: string | boolean
-  ) => {
-    setForm((current) => {
-      const next = current.spells.map((spell, i) =>
-        i === index ? { ...spell, [field]: value } : spell
-      );
-      return { ...current, spells: next };
-    });
-  };
-
-  const removeSpell = (index: number) => {
-    setForm((current) => ({
-      ...current,
-      spells: current.spells.filter((_, i) => i !== index),
-    }));
-  };
-
-  const addEquipment = () => {
-    setEquipmentCollapsed(false);
-    setPendingEquipment({
-      name: "",
-      quantity: "",
-      weight: "",
-      valueGold: "",
-      equipped: false,
-      notes: "",
-    });
-    setEditingEquipmentIndex(null);
-  };
-
-  const updateEquipment = (
-    index: number,
-    field: keyof EquipmentForm,
-    value: string | boolean
-  ) => {
-    setForm((current) => {
-      const next = current.equipment.map((item, i) =>
-        i === index ? { ...item, [field]: value } : item
-      );
-      return { ...current, equipment: next };
-    });
-  };
-
-  const removeEquipment = (index: number) => {
-    setForm((current) => ({
-      ...current,
-      equipment: current.equipment.filter((_, i) => i !== index),
-    }));
-  };
-
-  const updatePendingAttack = (field: keyof AttackForm, value: string | boolean) => {
-    setPendingAttack((current) => (current ? { ...current, [field]: value } : current));
-  };
-
-  const updatePendingSpell = (field: keyof SpellForm, value: string | boolean) => {
-    setPendingSpell((current) => (current ? { ...current, [field]: value } : current));
-  };
-
-  const updatePendingEquipment = (field: keyof EquipmentForm, value: string | boolean) => {
-    setPendingEquipment((current) => (current ? { ...current, [field]: value } : current));
-  };
-
   const renderTabContent = () => {
     if (activeTab === "actions") {
-      if (actionsCollapsed && actions.length > 0) {
-        return (
-          <div className="space-y-3">
-            <div className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-indigo-100">Resumo de Ações</span>
-              </div>
-              <div className="mt-3 space-y-2">
-                {form.attacks.map((attack, index) => (
-                  <div
-                    key={`action-resume-${index}`}
-                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-white">{attack.name || "Ataque"}</span>
-                      <span className="text-xs text-indigo-200">{buildActionDesc(attack)}</span>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setActionsCollapsed(false)}
-                      >
-                        Editar
-                      </Button>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-300">
-                      Bônus {formatSigned(toNumber(attack.attackBonus))} • Dano{" "}
-                      {attack.damageDice || "—"}{" "}
-                      {attack.damageBonus
-                        ? formatSigned(toNumber(attack.damageBonus))
-                        : ""}
-                      {"  "}• Tipo {attack.damageType || "—"}
-                      {"  "}• Alcance {attack.rangeNormal || "—"}/{attack.rangeLong || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-                <span>Resumo local das ações/ataques.</span>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => handleSave("actions")} disabled={isSaving}>
-                    {isSaving ? "Salvando..." : "Salvar Ficha"}
-                  </Button>
-                </div>
-              </div>
-              <div className="mt-3 flex justify-end">
-                <Button size="sm" variant="outline" onClick={addAttack}>
-                  Cadastrar mais ações
-                </Button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      const editingIndex = pendingAttack ? -1 : editingAttackIndex ?? -1;
-
       return (
         <div className="space-y-3">
           {form.attacks.length === 0 && (
             <EmptyState message="Nenhuma ação cadastrada. Adicione ataques ou ações especiais." />
           )}
 
-          {pendingAttack && (
-            <div className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4">
-              <div className="flex items-start justify-between gap-3">
-                <Field label="Nome do Ataque">
-                  <Input
-                    value={pendingAttack.name}
-                    onChange={(event) => updatePendingAttack("name", event.target.value)}
-                    placeholder="Ex: Espada Longa"
-                  />
-                </Field>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="self-start"
-                  onClick={() => setPendingAttack(null)}
-                >
-                  Cancelar
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Field label="Bônus de Ataque">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingAttack.attackBonus}
-                    onChange={(event) => updatePendingAttack("attackBonus", event.target.value)}
-                    placeholder="Ex: 5"
-                  />
-                </Field>
-                <Field label="Dado de Dano">
-                  <Input
-                    value={pendingAttack.damageDice}
-                    onChange={(event) => updatePendingAttack("damageDice", event.target.value)}
-                    placeholder="Ex: 1d8"
-                  />
-                </Field>
-                <Field label="Bônus de Dano">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingAttack.damageBonus}
-                    onChange={(event) => updatePendingAttack("damageBonus", event.target.value)}
-                  />
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Field label="Tipo de Dano">
-                  <Select
-                    value={pendingAttack.damageType}
-                    placeholder="Selecione"
-                    options={damageTypeOptions}
-                    onChange={(value) => updatePendingAttack("damageType", value)}
-                  />
-                </Field>
-                <Field label="Alcance Normal">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingAttack.rangeNormal}
-                    onChange={(event) => updatePendingAttack("rangeNormal", event.target.value)}
-                  />
-                </Field>
-                <Field label="Alcance Longo">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingAttack.rangeLong}
-                    onChange={(event) => updatePendingAttack("rangeLong", event.target.value)}
-                  />
-                </Field>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <Checkbox
-                  label="Corpo a corpo"
-                  checked={pendingAttack.melee}
-                  onChange={(checked) => updatePendingAttack("melee", checked)}
-                />
-                <Button size="sm" variant="secondary" onClick={saveActionsLocally}>
-                  Salvar ações (local)
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {form.attacks.map((attack, index) => {
-            const isEditing = index === editingIndex;
-            if (!isEditing) {
-              return (
-                <div
-                  key={index}
-                  className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold text-white">{attack.name || "Ataque"}</div>
-                      <div className="text-xs text-indigo-200">{buildActionDesc(attack)}</div>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={() => setEditingAttackIndex(index)}>
-                      Editar
-                    </Button>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-300">
-                    Bônus {formatSigned(toNumber(attack.attackBonus))} • Dano {attack.damageDice || "—"}{" "}
-                    {attack.damageBonus ? formatSigned(toNumber(attack.damageBonus)) : ""} • Tipo{" "}
-                    {attack.damageType || "—"} • Alcance {attack.rangeNormal || "—"}/{attack.rangeLong || "—"}
-                  </div>
+          {form.attacks.map((attack, index) => (
+            <div
+              key={index}
+              className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-white">{attack.name || "Ataque"}</div>
+                  <div className="text-xs text-indigo-200">{buildActionDesc(attack)}</div>
                 </div>
-              );
-            }
-
-            return (
-              <div
-                key={index}
-                className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <Field label="Nome do Ataque">
-                    <Input
-                      value={attack.name}
-                      onChange={(event) => updateAttack(index, "name", event.target.value)}
-                      placeholder="Ex: Espada Longa"
-                    />
-                  </Field>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="self-start"
-                    onClick={() => removeAttack(index)}
-                  >
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => openAttackModal(index)}>
+                    Editar
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => removeAttack(index)}>
                     Remover
                   </Button>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Bônus de Ataque">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={attack.attackBonus}
-                      onChange={(event) => updateAttack(index, "attackBonus", event.target.value)}
-                      placeholder="Ex: 5"
-                    />
-                  </Field>
-                  <Field label="Dado de Dano">
-                    <Input
-                      value={attack.damageDice}
-                      onChange={(event) => updateAttack(index, "damageDice", event.target.value)}
-                      placeholder="Ex: 1d8"
-                    />
-                  </Field>
-                  <Field label="Bônus de Dano">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={attack.damageBonus}
-                      onChange={(event) => updateAttack(index, "damageBonus", event.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Tipo de Dano">
-                    <Select
-                      value={attack.damageType}
-                      placeholder="Selecione"
-                      options={damageTypeOptions}
-                      onChange={(value) => updateAttack(index, "damageType", value)}
-                    />
-                  </Field>
-                  <Field label="Alcance Normal">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={attack.rangeNormal}
-                      onChange={(event) => updateAttack(index, "rangeNormal", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Alcance Longo">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={attack.rangeLong}
-                      onChange={(event) => updateAttack(index, "rangeLong", event.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Checkbox
-                    label="Corpo a corpo"
-                    checked={attack.melee}
-                    onChange={(checked) => updateAttack(index, "melee", checked)}
-                  />
-                  <Button size="sm" variant="secondary" onClick={saveActionsLocally}>
-                    Salvar ações (local)
-                  </Button>
-                </div>
               </div>
-            );
-          })}
-
-          <Button size="sm" variant="outline" onClick={addAttack}>
-            + Adicionar Ataque/Ação
-          </Button>
-
-          {lastSavedSection === "actions" && actions.length > 0 && actionsCollapsed && (
-            <div className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200">
-              <div className="mt-3 space-y-2">
-                {form.attacks.map((attack, index) => (
-                  <div
-                    key={`action-resume-inline-${index}`}
-                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-white">{attack.name || "Ataque"}</span>
-                      <span className="text-xs text-indigo-200">{buildActionDesc(attack)}</span>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          setActionsCollapsed(false);
-                          setEditingAttackIndex(index);
-                        }}
-                      >
-                        Editar
-                      </Button>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-300">
-                      Bônus {formatSigned(toNumber(attack.attackBonus))} • Dano{" "}
-                      {attack.damageDice || "—"}{" "}
-                      {attack.damageBonus
-                        ? formatSigned(toNumber(attack.damageBonus))
-                        : ""}
-                      {"  "}• Tipo {attack.damageType || "—"}
-                      {"  "}• Alcance {attack.rangeNormal || "—"}/{attack.rangeLong || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                <span>Resumo local das ações/ataques.</span>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => handleSave("actions")} disabled={isSaving}>
-                    {isSaving ? "Salvando..." : "Salvar Ficha"}
-                  </Button>
-                </div>
+              <div className="mt-1 text-xs text-slate-300">
+                Bônus {formatSigned(toNumber(attack.attackBonus))} • Dano {attack.damageDice || "—"}{" "}
+                {attack.damageBonus ? formatSigned(toNumber(attack.damageBonus)) : ""} • Tipo{" "}
+                {attack.damageType || "—"} • Alcance {attack.rangeNormal || "—"}/{attack.rangeLong || "—"}
               </div>
             </div>
-          )}
+          ))}
+
+          <Button size="sm" variant="outline" onClick={() => openAttackModal()}>
+            + Adicionar Ataque/Ação
+          </Button>
         </div>
       );
     }
 
     if (activeTab === "spells") {
-      const editingIndex = pendingSpell ? -1 : editingSpellIndex ?? -1;
-
       return (
         <div className="space-y-3">
-          {form.spells.length === 0 && !pendingSpell && (
+          {form.spells.length === 0 && (
             <EmptyState message="Nenhuma magia adicionada. Cadastre suas magias preparadas." />
           )}
 
-          {pendingSpell && (
-            <div className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4">
-              <div className="flex items-start justify-between gap-3">
-                <Field label="Nome da Magia">
-                  <Input
-                    value={pendingSpell.name}
-                    onChange={(event) => updatePendingSpell("name", event.target.value)}
-                    placeholder="Ex: Raio de Fogo"
-                  />
-                </Field>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="self-start"
-                  onClick={() => setPendingSpell(null)}
-                >
-                  Cancelar
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                <Field label="Nível">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingSpell.level}
-                    onChange={(event) =>
-                      updatePendingSpell("level", event.target.value)
-                    }
-                  />
-                </Field>
-                <Field label="Escola">
-                  <Input
-                    value={pendingSpell.school}
-                    onChange={(event) => updatePendingSpell("school", event.target.value)}
-                  />
-                </Field>
-                <Field label="Tempo de Conjuração">
-                  <Input
-                    value={pendingSpell.castingTime}
-                    onChange={(event) => updatePendingSpell("castingTime", event.target.value)}
-                  />
-                </Field>
-                <Field label="Alcance">
-                  <Input
-                    value={pendingSpell.rangeText}
-                    onChange={(event) => updatePendingSpell("rangeText", event.target.value)}
-                  />
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Field label="Componentes">
-                  <Input
-                    value={pendingSpell.components}
-                    onChange={(event) => updatePendingSpell("components", event.target.value)}
-                  />
-                </Field>
-                <Field label="Duração">
-                  <Input
-                    value={pendingSpell.duration}
-                    onChange={(event) => updatePendingSpell("duration", event.target.value)}
-                  />
-                </Field>
-                <Field label="Tipo de Dano">
-                  <Select
-                    value={pendingSpell.damageType}
-                    placeholder="Selecione"
-                    options={damageTypeOptions}
-                    onChange={(value) => updatePendingSpell("damageType", value)}
-                  />
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Field label="Dado de Dano">
-                  <Input
-                    value={pendingSpell.damageDice}
-                    onChange={(event) => updatePendingSpell("damageDice", event.target.value)}
-                  />
-                </Field>
-                <Field label="Bônus de Dano">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingSpell.damageBonus}
-                    onChange={(event) =>
-                      updatePendingSpell("damageBonus", event.target.value)
-                    }
-                  />
-                </Field>
-                <div className="flex flex-col gap-2">
-                  <span className="text-xs uppercase tracking-wide text-slate-400">
-                    Preparada?
-                  </span>
-                  <Checkbox
-                    label="Magia preparada"
-                    checked={pendingSpell.prepared}
-                    onChange={(checked) => updatePendingSpell("prepared", checked)}
-                  />
-                </div>
-              </div>
-              <Field label="Descrição">
-                <Textarea
-                  value={pendingSpell.description}
-                  onChange={(event) => updatePendingSpell("description", event.target.value)}
-                  placeholder="Efeitos, condições, detalhes narrativos..."
-                />
-              </Field>
-              <div className="flex justify-end">
-                <Button size="sm" variant="secondary" onClick={saveSpellsLocally}>
-                  Salvar magias (local)
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {form.spells.map((spell, index) => {
-            const isEditing = index === editingIndex;
-            if (!isEditing) {
-              return (
-                <div
-                  key={index}
-                  className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold text-white">{spell.name || "Magia"}</div>
-                      <div className="text-xs text-indigo-200">
-                        Nível {spell.level || "0"} • {spell.school || "—"} • {spell.castingTime || "—"}
-                      </div>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={() => setEditingSpellIndex(index)}>
-                      Editar
-                    </Button>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-300">
-                    Alcance {spell.rangeText || "—"} • Dano {spell.damageDice || "—"}{" "}
-                    {spell.damageBonus ? formatSigned(toNumber(spell.damageBonus)) : ""} • Tipo{" "}
-                    {spell.damageType || "—"}
+          {form.spells.map((spell, index) => (
+            <div
+              key={index}
+              className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-white">{spell.name || "Magia"}</div>
+                  <div className="text-xs text-indigo-200">
+                    Nível {spell.level || "0"} • {spell.school || "—"} • {spell.castingTime || "—"}
                   </div>
                 </div>
-              );
-            }
-
-            return (
-              <div
-                key={index}
-                className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <Field label="Nome da Magia">
-                    <Input
-                      value={spell.name}
-                      onChange={(event) => updateSpell(index, "name", event.target.value)}
-                      placeholder="Ex: Raio de Fogo"
-                    />
-                  </Field>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="self-start"
-                    onClick={() => removeSpell(index)}
-                  >
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => openSpellModal(index)}>
+                    Editar
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => removeSpell(index)}>
                     Remover
                   </Button>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                  <Field label="Nível">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={spell.level}
-                      onChange={(event) => updateSpell(index, "level", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Escola">
-                    <Input
-                      value={spell.school}
-                      onChange={(event) => updateSpell(index, "school", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Tempo de Conjuração">
-                    <Input
-                      value={spell.castingTime}
-                      onChange={(event) => updateSpell(index, "castingTime", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Alcance">
-                    <Input
-                      value={spell.rangeText}
-                      onChange={(event) => updateSpell(index, "rangeText", event.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Componentes">
-                    <Input
-                      value={spell.components}
-                      onChange={(event) => updateSpell(index, "components", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Duração">
-                    <Input
-                      value={spell.duration}
-                      onChange={(event) => updateSpell(index, "duration", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Tipo de Dano">
-                    <Select
-                      value={spell.damageType}
-                      placeholder="Selecione"
-                      options={damageTypeOptions}
-                      onChange={(value) => updateSpell(index, "damageType", value)}
-                    />
-                  </Field>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Dado de Dano">
-                    <Input
-                      value={spell.damageDice}
-                      onChange={(event) => updateSpell(index, "damageDice", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Bônus de Dano">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={spell.damageBonus}
-                      onChange={(event) => updateSpell(index, "damageBonus", event.target.value)}
-                    />
-                  </Field>
-                  <div className="flex flex-col gap-2">
-                    <span className="text-xs uppercase tracking-wide text-slate-400">
-                      Preparada?
-                    </span>
-                    <Checkbox
-                      label="Magia preparada"
-                      checked={spell.prepared}
-                      onChange={(checked) => updateSpell(index, "prepared", checked)}
-                    />
-                  </div>
-                </div>
-                <Field label="Descrição">
-                  <Textarea
-                    value={spell.description}
-                    onChange={(event) => updateSpell(index, "description", event.target.value)}
-                    placeholder="Efeitos, condições, detalhes narrativos..."
-                  />
-                </Field>
-                <div className="flex justify-end">
-                  <Button size="sm" variant="secondary" onClick={saveSpellsLocally}>
-                    Salvar magias (local)
-                  </Button>
-                </div>
               </div>
-            );
-          })}
-
-          <Button size="sm" variant="outline" onClick={addSpell}>
-            + Adicionar Magia
-          </Button>
-
-          {lastSavedSection === "spells" && form.spells.length > 0 && spellsCollapsed && (
-            <div className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200">
-              <div className="mt-3 space-y-2">
-                {form.spells.map((spell, index) => (
-                  <div
-                    key={`spell-resume-inline-${index}`}
-                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-white">{spell.name || "Magia"}</span>
-                      <span className="text-xs text-indigo-200">
-                        Nível {spell.level || "0"} • {spell.school || "—"} • {spell.castingTime || "—"}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          setSpellsCollapsed(false);
-                          setEditingSpellIndex(index);
-                        }}
-                      >
-                        Editar
-                      </Button>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-300">
-                      Alcance {spell.rangeText || "—"} • Dano {spell.damageDice || "—"}{" "}
-                      {spell.damageBonus ? formatSigned(toNumber(spell.damageBonus)) : ""} • Tipo{" "}
-                      {spell.damageType || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                <span>Resumo local das magias.</span>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => handleSave("spells")} disabled={isSaving}>
-                    {isSaving ? "Salvando..." : "Salvar Ficha"}
-                  </Button>
-                </div>
-              </div>
-              <div className="mt-3 flex justify-end">
-                <Button size="sm" variant="outline" onClick={addSpell}>
-                  Cadastrar mais magias
-                </Button>
+              <div className="mt-1 text-xs text-slate-300">
+                Alcance {spell.rangeText || "—"} • Dano {spell.damageDice || "—"}{" "}
+                {spell.damageBonus ? formatSigned(toNumber(spell.damageBonus)) : ""} • Tipo {spell.damageType || "—"}
               </div>
             </div>
-          )}
+          ))}
+
+          <Button size="sm" variant="outline" onClick={() => openSpellModal()}>
+            + Adicionar Magia
+          </Button>
         </div>
       );
     }
 
     if (activeTab === "equipment") {
-      const editingIndex = pendingEquipment ? -1 : editingEquipmentIndex ?? -1;
-
       return (
         <div className="space-y-3">
-          {form.equipment.length === 0 && !pendingEquipment && (
+          {form.equipment.length === 0 && (
             <EmptyState message="Nenhum item cadastrado. Adicione o equipamento carregado." />
           )}
 
-          {pendingEquipment && (
+          {form.equipment.map((item, index) => (
             <div
-              key="pending-equipment"
-              className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4"
+              key={index}
+              className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
             >
-              <div className="flex items-start justify-between gap-3">
-                <Field label="Nome do Item">
-                  <Input
-                    value={pendingEquipment.name}
-                    onChange={(event) => updatePendingEquipment("name", event.target.value)}
-                    placeholder="Ex: Mochila"
-                  />
-                </Field>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="self-start"
-                  onClick={() => setPendingEquipment(null)}
-                >
-                  Cancelar
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                <Field label="Quantidade">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingEquipment.quantity}
-                    onChange={(event) => updatePendingEquipment("quantity", event.target.value)}
-                  />
-                </Field>
-                <Field label="Peso">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingEquipment.weight}
-                    onChange={(event) => updatePendingEquipment("weight", event.target.value)}
-                  />
-                </Field>
-                <Field label="Valor (PO)">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    value={pendingEquipment.valueGold}
-                    onChange={(event) => updatePendingEquipment("valueGold", event.target.value)}
-                  />
-                </Field>
-                <div className="flex flex-col gap-2">
-                  <span className="text-xs uppercase tracking-wide text-slate-400">
-                    Status
-                  </span>
-                  <Checkbox
-                    label="Equipado"
-                    checked={pendingEquipment.equipped}
-                    onChange={(checked) => updatePendingEquipment("equipped", checked)}
-                  />
-                </div>
-              </div>
-              <Field label="Notas">
-                <Textarea
-                  value={pendingEquipment.notes}
-                  onChange={(event) => updatePendingEquipment("notes", event.target.value)}
-                  placeholder="Detalhes, posição na mochila..."
-                />
-              </Field>
-              <div className="flex justify-end">
-                <Button size="sm" variant="secondary" onClick={saveEquipmentLocally}>
-                  Salvar equipamentos (local)
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {form.equipment.map((item, index) => {
-            const isEditing = index === editingIndex;
-            if (!isEditing) {
-              return (
-                <div
-                  key={index}
-                  className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold text-white">{item.name || "Item"}</div>
-                      <div className="text-xs text-indigo-200">
-                        Quantidade {item.quantity || "—"} • Peso {item.weight || "—"} • Valor{" "}
-                        {item.valueGold || "—"}
-                      </div>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={() => setEditingEquipmentIndex(index)}>
-                      Editar
-                    </Button>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-300">
-                    {item.equipped ? "Equipado" : "Mochila"} • Notas: {item.notes || "—"}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-white">{item.name || "Item"}</div>
+                  <div className="text-xs text-indigo-200">
+                    Quantidade {item.quantity || "—"} • Peso {item.weight || "—"} • Valor {item.valueGold || "—"}
                   </div>
                 </div>
-              );
-            }
-
-            return (
-              <div
-                key={index}
-                className="space-y-3 rounded-xl border border-white/10 bg-[#0f0f25] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <Field label="Nome do Item">
-                    <Input
-                      value={item.name}
-                      onChange={(event) => updateEquipment(index, "name", event.target.value)}
-                      placeholder="Ex: Mochila"
-                    />
-                  </Field>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="self-start"
-                    onClick={() => removeEquipment(index)}
-                  >
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => openEquipmentModal(index)}>
+                    Editar
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => removeEquipment(index)}>
                     Remover
                   </Button>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                  <Field label="Quantidade">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={item.quantity}
-                      onChange={(event) => updateEquipment(index, "quantity", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Peso">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={item.weight}
-                      onChange={(event) => updateEquipment(index, "weight", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Valor (PO)">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={item.valueGold}
-                      onChange={(event) => updateEquipment(index, "valueGold", event.target.value)}
-                    />
-                  </Field>
-                  <div className="flex flex-col gap-2">
-                    <span className="text-xs uppercase tracking-wide text-slate-400">
-                      Status
-                    </span>
-                    <Checkbox
-                      label="Equipado"
-                      checked={item.equipped}
-                      onChange={(checked) => updateEquipment(index, "equipped", checked)}
-                    />
-                  </div>
-                </div>
-                <Field label="Notas">
-                  <Textarea
-                    value={item.notes}
-                    onChange={(event) => updateEquipment(index, "notes", event.target.value)}
-                    placeholder="Detalhes, posição na mochila..."
-                  />
-                </Field>
-                <div className="flex justify-end">
-                  <Button size="sm" variant="secondary" onClick={saveEquipmentLocally}>
-                    Salvar equipamentos (local)
-                  </Button>
-                </div>
               </div>
-            );
-          })}
-
-          <Button size="sm" variant="outline" onClick={addEquipment}>
-            + Adicionar Item
-          </Button>
-
-          {lastSavedSection === "equipment" && form.equipment.length > 0 && equipmentCollapsed && (
-            <div className="rounded-xl border border-white/10 bg-[#0f0f25] p-4 text-sm text-slate-200">
-              <div className="mt-3 space-y-2">
-                {form.equipment.map((item, index) => (
-                  <div
-                    key={`eq-resume-inline-${index}`}
-                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-white">{item.name || "Item"}</span>
-                      <span className="text-xs text-indigo-200">
-                        Qtd {item.quantity || "—"} • Peso {item.weight || "—"} • Valor {item.valueGold || "—"}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          setEquipmentCollapsed(false);
-                          setEditingEquipmentIndex(index);
-                        }}
-                      >
-                        Editar
-                      </Button>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-300">
-                      {item.equipped ? "Equipado" : "Mochila"} • Notas: {item.notes || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                <span>Resumo local dos equipamentos.</span>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => handleSave("equipment")} disabled={isSaving}>
-                    {isSaving ? "Salvando..." : "Salvar Ficha"}
-                  </Button>
-                </div>
-              </div>
-              <div className="mt-3 flex justify-end">
-                <Button size="sm" variant="outline" onClick={addEquipment}>
-                  Cadastrar mais itens
-                </Button>
+              <div className="mt-1 text-xs text-slate-300">
+                {item.equipped ? "Equipado" : "Mochila"} • Notas: {item.notes || "—"}
               </div>
             </div>
-          )}
+          ))}
+
+          <Button size="sm" variant="outline" onClick={() => openEquipmentModal()}>
+            + Adicionar Item
+          </Button>
         </div>
       );
     }
@@ -1997,6 +1290,8 @@ export default function FichaPage({
             onOpenDice={() => setShowDice(true)}
             activeTab={activeTab}
             onTabChange={setActiveTab}
+            onHpChange={handlePreviewHpChange}
+            isSyncingHp={isHpSyncing}
           />
         ) : (
           <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm text-slate-300">
@@ -2004,6 +1299,251 @@ export default function FichaPage({
           </div>
         )}
       </div>
+
+      {editModal && (
+        <Modal
+          title={
+            editModal.type === "attack"
+              ? editModal.index === null
+                ? "Adicionar Ataque/Ação"
+                : "Editar Ataque/Ação"
+              : editModal.type === "spell"
+                ? editModal.index === null
+                  ? "Adicionar Magia"
+                  : "Editar Magia"
+                : editModal.index === null
+                  ? "Adicionar Equipamento"
+                  : "Editar Equipamento"
+          }
+          onClose={() => setEditModal(null)}
+          onSave={saveModal}
+          primaryLabel={editModal.index === null ? "Adicionar" : "Salvar"}
+          saving={isModalSaving}
+        >
+          {editModal.type === "attack" && (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <Field label="Nome do Ataque">
+                  <Input
+                    value={editModal.data.name}
+                    onChange={(event) => updateModalData("name", event.target.value)}
+                    placeholder="Ex: Espada Longa"
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Bônus de Ataque">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.attackBonus}
+                    onChange={(event) => updateModalData("attackBonus", event.target.value)}
+                    placeholder="Ex: 5"
+                  />
+                </Field>
+                <Field label="Dado de Dano">
+                  <Input
+                    value={editModal.data.damageDice}
+                    onChange={(event) => updateModalData("damageDice", event.target.value)}
+                    placeholder="Ex: 1d8"
+                  />
+                </Field>
+                <Field label="Bônus de Dano">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.damageBonus}
+                    onChange={(event) => updateModalData("damageBonus", event.target.value)}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Tipo de Dano">
+                  <Select
+                    value={editModal.data.damageType}
+                    placeholder="Selecione"
+                    options={damageTypeOptions}
+                    onChange={(value) => updateModalData("damageType", value)}
+                  />
+                </Field>
+                <Field label="Alcance Normal">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.rangeNormal}
+                    onChange={(event) => updateModalData("rangeNormal", event.target.value)}
+                  />
+                </Field>
+                <Field label="Alcance Longo">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.rangeLong}
+                    onChange={(event) => updateModalData("rangeLong", event.target.value)}
+                  />
+                </Field>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Checkbox
+                  label="Corpo a corpo"
+                  checked={editModal.data.melee}
+                  onChange={(checked) => updateModalData("melee", checked)}
+                />
+              </div>
+            </div>
+          )}
+
+          {editModal.type === "spell" && (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <Field label="Nome da Magia">
+                  <Input
+                    value={editModal.data.name}
+                    onChange={(event) => updateModalData("name", event.target.value)}
+                    placeholder="Ex: Raio de Fogo"
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <Field label="Nível">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.level}
+                    onChange={(event) => updateModalData("level", event.target.value)}
+                  />
+                </Field>
+                <Field label="Escola">
+                  <Input
+                    value={editModal.data.school}
+                    onChange={(event) => updateModalData("school", event.target.value)}
+                  />
+                </Field>
+                <Field label="Tempo de Conjuração">
+                  <Input
+                    value={editModal.data.castingTime}
+                    onChange={(event) => updateModalData("castingTime", event.target.value)}
+                  />
+                </Field>
+                <Field label="Alcance">
+                  <Input
+                    value={editModal.data.rangeText}
+                    onChange={(event) => updateModalData("rangeText", event.target.value)}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Componentes">
+                  <Input
+                    value={editModal.data.components}
+                    onChange={(event) => updateModalData("components", event.target.value)}
+                  />
+                </Field>
+                <Field label="Duração">
+                  <Input
+                    value={editModal.data.duration}
+                    onChange={(event) => updateModalData("duration", event.target.value)}
+                  />
+                </Field>
+                <Field label="Tipo de Dano">
+                  <Select
+                    value={editModal.data.damageType}
+                    placeholder="Selecione"
+                    options={damageTypeOptions}
+                    onChange={(value) => updateModalData("damageType", value)}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Dado de Dano">
+                  <Input
+                    value={editModal.data.damageDice}
+                    onChange={(event) => updateModalData("damageDice", event.target.value)}
+                  />
+                </Field>
+                <Field label="Bônus de Dano">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.damageBonus}
+                    onChange={(event) => updateModalData("damageBonus", event.target.value)}
+                  />
+                </Field>
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-wide text-slate-400">Preparada?</span>
+                  <Checkbox
+                    label="Magia preparada"
+                    checked={editModal.data.prepared}
+                    onChange={(checked) => updateModalData("prepared", checked)}
+                  />
+                </div>
+              </div>
+              <Field label="Descrição">
+                <Textarea
+                  value={editModal.data.description}
+                  onChange={(event) => updateModalData("description", event.target.value)}
+                  placeholder="Efeitos, condições, detalhes narrativos..."
+                />
+              </Field>
+            </div>
+          )}
+
+          {editModal.type === "equipment" && (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <Field label="Nome do Item">
+                  <Input
+                    value={editModal.data.name}
+                    onChange={(event) => updateModalData("name", event.target.value)}
+                    placeholder="Ex: Mochila"
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <Field label="Quantidade">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.quantity}
+                    onChange={(event) => updateModalData("quantity", event.target.value)}
+                  />
+                </Field>
+                <Field label="Peso">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.weight}
+                    onChange={(event) => updateModalData("weight", event.target.value)}
+                  />
+                </Field>
+                <Field label="Valor (PO)">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={editModal.data.valueGold}
+                    onChange={(event) => updateModalData("valueGold", event.target.value)}
+                  />
+                </Field>
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-wide text-slate-400">Status</span>
+                  <Checkbox
+                    label="Equipado"
+                    checked={editModal.data.equipped}
+                    onChange={(checked) => updateModalData("equipped", checked)}
+                  />
+                </div>
+              </div>
+              <Field label="Notas">
+                <Textarea
+                  value={editModal.data.notes}
+                  onChange={(event) => updateModalData("notes", event.target.value)}
+                  placeholder="Detalhes, posição na mochila..."
+                />
+              </Field>
+            </div>
+          )}
+        </Modal>
+      )}
 
       {showDice && (
         <DiceTray
@@ -2030,12 +1570,16 @@ function FichaPreview({
   onOpenDice,
   activeTab,
   onTabChange,
+  onHpChange,
+  isSyncingHp = false,
 }: {
   data: RpgFichaResponse;
   onEdit: () => void;
   onOpenDice: () => void;
   activeTab: TabKey;
   onTabChange: (tab: TabKey) => void;
+  onHpChange: (hp: number) => void;
+  isSyncingHp?: boolean;
 }) {
   const abilityScores = abilityMeta.map((ability) => {
     const score = data.attributes?.[ability.key] ?? 0;
@@ -2050,7 +1594,7 @@ function FichaPreview({
   const savingThrows = abilityMeta.map((ability) => {
     const mod = Math.floor(((data.attributes?.[ability.key] ?? 10) - 10) / 2);
     const proficient = data.saveProficiencies?.includes(abilityCodes[ability.key]);
-    const total = mod + (proficient ? data.proficiencyBonus || 0 : 0);
+    const total = mod + (proficient ? getAppliedProficiency(data.proficiencyBonus) : 0);
     return {
       label: ability.label,
       proficient,
@@ -2062,7 +1606,7 @@ function FichaPreview({
     const abilityScore = data.attributes?.[skill.ability] ?? 10;
     const mod = Math.floor((abilityScore - 10) / 2);
     const proficient = data.skillProficiencies?.includes(skill.key);
-    const total = mod + (proficient ? data.proficiencyBonus || 0 : 0);
+    const total = mod + (proficient ? Math.max(0, toNumeric(data.proficiencyBonus)) : 0);
     return {
       label: skill.label,
       proficient,
@@ -2072,11 +1616,12 @@ function FichaPreview({
 
   const hpMax = data.maxHp || 0;
   const hpCurrent = data.currentHp || 0;
+  const [hpValue, setHpValue] = useState(hpCurrent);
+  const hpPercent = Math.min(100, Math.max(0, Math.round((hpValue / Math.max(1, hpMax)) * 100)));
 
-  const headerBadges = [
-    data.alignment ? `Alinhamento: ${data.alignment}` : null,
-    data.hpDice ? `Dados de Vida: ${data.hpDice}` : null,
-  ].filter((badge): badge is string => Boolean(badge));
+  useEffect(() => {
+    setHpValue(hpCurrent);
+  }, [hpCurrent]);
 
   const renderViewTabs = () => {
     if (activeTab === "actions") {
@@ -2218,15 +1763,21 @@ function FichaPreview({
             </div>
             <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3">
               <span className="text-xs uppercase tracking-wide text-slate-400">Raça</span>
-              <span className="text-sm text-indigo-100">{data.race || "—"}</span>
+              <span className="text-sm text-indigo-100">
+                {data.race ? formatEnumLabel(data.race) : "—"}
+              </span>
             </div>
             <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3">
               <span className="text-xs uppercase tracking-wide text-slate-400">Sub-raça</span>
-              <span className="text-sm text-indigo-100">{data.subRace || "—"}</span>
+              <span className="text-sm text-indigo-100">
+                {data.subRace ? formatEnumLabel(data.subRace) : "—"}
+              </span>
             </div>
             <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3">
               <span className="text-xs uppercase tracking-wide text-slate-400">Ancestralidade</span>
-              <span className="text-sm text-indigo-100">{data.ancestry || "—"}</span>
+              <span className="text-sm text-indigo-100">
+                {data.ancestry ? formatEnumLabel(data.ancestry) : "—"}
+              </span>
             </div>
             <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3">
               <span className="text-xs uppercase tracking-wide text-slate-400">Alinhamento</span>
@@ -2287,10 +1838,29 @@ function FichaPreview({
               <div className="mt-3 space-y-2">
                 <div className="flex items-center gap-3">
                   <div className="flex-1">
-                    <ProgressBar value={hpCurrent} max={Math.max(1, hpMax)} color="red" />
+                    <div className="relative">
+                      <ProgressBar value={hpValue} max={Math.max(1, hpMax)} color="red" />
+                      <div
+                        className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 -translate-x-1/2 rounded-full border border-white/60 bg-white/80 shadow"
+                        style={{ left: `${hpPercent}%` }}
+                        aria-hidden
+                      />
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(1, hpMax)}
+                        value={hpValue}
+                        onChange={(event) => {
+                          const next = Number(event.target.value) || 0;
+                          setHpValue(next);
+                          onHpChange(next);
+                        }}
+                        className="absolute inset-0 h-3 w-full cursor-ew-resize opacity-0"
+                      />
+                    </div>
                     <div className="mt-1 flex justify-between text-xs text-slate-400">
                       <span>
-                        {hpCurrent} / {hpMax}
+                        {hpValue} / {hpMax}
                       </span>
                       <span>Temp: {data.tempHp ?? 0}</span>
                     </div>
@@ -2307,9 +1877,12 @@ function FichaPreview({
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-md bg-white/5 px-2 py-1 text-slate-200">Vida Atual</span>
-                    <span className="text-sm text-indigo-100">{hpCurrent}</span>
+                    <span className="text-sm text-indigo-100">{hpValue}</span>
                   </div>
                 </div>
+                {isSyncingHp && (
+                  <div className="text-[11px] text-indigo-200">Sincronizando HP com o servidor...</div>
+                )}
               </div>
             </div>
           </div>
@@ -2405,6 +1978,45 @@ function FichaPreview({
     </section>
   );
 }
+
+function Modal({
+  title,
+  children,
+  onClose,
+  onSave,
+  primaryLabel = "Salvar",
+  saving = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  onSave: () => void;
+  primaryLabel?: string;
+  saving?: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0d0c1f] p-6 shadow-2xl shadow-black/50">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Fechar
+          </Button>
+        </div>
+        <div className="mt-4 max-h-[70vh] overflow-y-auto pr-1">{children}</div>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
+            Cancelar
+          </Button>
+          <Button onClick={onSave} disabled={saving}>
+            {saving ? "Salvando..." : primaryLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Header() {
   const pathname = usePathname();
   const isActive = (href: string) =>
@@ -2622,7 +2234,7 @@ function Select({
       <option value="">{placeholder ?? "Selecione"}</option>
       {options.map((option) => (
         <option key={option} value={option} className="bg-[#0b0a1d] text-slate-100">
-          {option}
+          {formatEnumLabel(option)}
         </option>
       ))}
     </select>
